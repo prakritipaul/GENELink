@@ -15,8 +15,6 @@ parser.add_argument('--net', type=str, default='Specific', help='network type')
 args = parser.parse_args()
 
 
-
-
 def train_val_test_set(label_file,Gene_file,TF_file,train_set_file,val_set_file,test_set_file,density,p_val=args.p_val):
 
     gene_set = pd.read_csv(Gene_file, index_col=0)['index'].values

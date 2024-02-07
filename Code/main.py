@@ -38,9 +38,6 @@ torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 
 
-
-
-
 def embed2file(tf_embed,tg_embed,gene_file,tf_path,target_path):
     tf_embed = tf_embed.cpu().detach().numpy()
     tg_embed = tg_embed.cpu().detach().numpy()
@@ -53,9 +50,13 @@ def embed2file(tf_embed,tg_embed,gene_file,tf_path,target_path):
     tf_embed.to_csv(tf_path)
     tg_embed.to_csv(target_path)
 
-exp_file = '.../BL--ExpressionData.csv'
-tf_file = '.../TF.csv'
-target_file = '.../Target.csv'
+# Let's do mESC/TFs+500
+data_dir = "/Users/prakritipaul/Git/GENELink/Dataset/Benchmark Dataset/Lofgof Dataset/mESC/TFs+500/"
+train_test_dir = ""
+
+exp_file = data_dir+"BL--ExpressionData.csv"
+tf_file = data_dir+"TF.csv"
+target_file = data+"Target.csv"
 
 train_file = '.../Train_set.csv'
 val_file = '.../Validation_set.csv'
@@ -175,8 +176,6 @@ model.load_state_dict(torch.load(model_path + model_path +'.../.pkl'))
 model.eval()
 tf_embed, target_embed = model.get_embedding()
 embed2file(tf_embed,target_embed,target_file,tf_embed_path,target_embed_path)
-
-
 
 
 

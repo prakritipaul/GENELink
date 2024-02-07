@@ -6,9 +6,65 @@ import torch.optim as optm
 from torch.nn import CosineSimilarity
 
 
+class AttentionLayer(nn.Module):
+    def __init__(self, input_dim, output_dim, alpha=0.2, bias=True):
+        super(AttentionLayer, self).__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.alpha = alpha
+        ## ADD WHAT THIS IS ##
+        self.weight = nn.Parameter(torch.FloatTensor(self.input_dim, self.output_dim))
+        self.weight_interact = nn.Parameter(torch.FloatTensor(self.input_dim,self.output_dim))
+        # Used to compute attention coefficients
+        #   2*self.output_dim because 2 things are concatenated.
+        self.a = nn.Parameter(torch.zeros(size=(2*self.output_dim, 1)))
+
+        if bias:
+            self.bias = nn.Parameter(torch.FloatTensor(self.output_dim))
+        else:
+            self.register_parameter('bias', None)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.weight.data, gain=1.414)
+        nn.init.xavier_uniform_(self.weight_interact.data, gain=1.414)
+        if self.bias is not None:
+            self.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.a.data, gain=1.414)
+
+    def _prepare_attentional_mechanism_input(self, x):
+        # Note: there are no weights here!
+        Wh1 = torch.matmul(x, self.a[:self.output_dim, :])
+        Wh2 = torch.matmul(x, self.a[self.output_dim:, :])
+        # actual value of the attention score 
+        e = F.leaky_relu(Wh1+Wh2.T, negative_slope=self.alpha)
+        return e
+
+    def forward(self, x, adj):
+        # input * learnable weight
+        h = torch.matmul(x, self.weight)
+        e = self._prepare_attentional_mechanism_input(h)
+
+        zero_vec = -9e15 * torch.ones_like(e)
+        attention = torch.where(adj.to_dense()>0, e, zero_vec)
+        attention = F.softmax(attention, dim=1)
+        # attention = F.softmax(e, dim=1)
+        attention = F.dropout(attention, training=self.training)
+
+        h_pass = torch.matmul(attention, h)
+
+        output_data = h_pass
+        output_data = F.leaky_relu(output_data,negative_slope=self.alpha)
+        output_data = F.normalize(output_data,p=2,dim=1)
+
+        if self.bias is not None:
+            output_data = output_data + self.bias
+        return output_data
+
+
 class GENELink(nn.Module):
-    def __init__(self,input_dim,hidden1_dim,hidden2_dim,hidden3_dim,output_dim,num_head1,num_head2,
-                 alpha,device,type,reduction):
+    def __init__(self, input_dim, hidden1_dim, hidden2_dim, hidden3_dim, output_dim, num_head1, num_head2,
+                  alpha, device, type, reduction):
         super(GENELink, self).__init__()
         self.num_head1 = num_head1
         self.num_head2 = num_head2
@@ -20,12 +76,15 @@ class GENELink(nn.Module):
         if self.reduction == 'mean':
             self.hidden1_dim = hidden1_dim
             self.hidden2_dim = hidden2_dim
+
+        #?# Why? #?#
         elif self.reduction == 'concate':
+            #?# Why? maybe because k heads get concatenated #?#
             self.hidden1_dim = num_head1*hidden1_dim
             self.hidden2_dim = num_head2*hidden2_dim
 
-
-        self.ConvLayer1 = [AttentionLayer(input_dim,hidden1_dim,alpha) for _ in range(num_head1)]
+        # Make num_head1 attention layers (they will be concatenated*)
+        self.ConvLayer1 = [AttentionLayer(input_dim, hidden1_dim, alpha) for _ in range(num_head1)]
         for i, attention in enumerate(self.ConvLayer1):
             self.add_module('ConvLayer1_AttentionHead{}'.format(i),attention)
 
@@ -38,8 +97,6 @@ class GENELink(nn.Module):
 
         self.tf_linear2 = nn.Linear(hidden3_dim,output_dim)
         self.target_linear2 = nn.Linear(hidden3_dim, output_dim)
-
-
 
         if self.type == 'MLP':
             self.linear = nn.Linear(2*output_dim, 2)
@@ -59,10 +116,7 @@ class GENELink(nn.Module):
         nn.init.xavier_uniform_(self.target_linear2.weight, gain=1.414)
 
 
-
-
     def encode(self,x,adj):
-
         if self.reduction =='concate':
             x = torch.cat([att(x, adj) for att in self.ConvLayer1], dim=1)
             x = F.elu(x)
@@ -74,39 +128,30 @@ class GENELink(nn.Module):
         else:
             raise TypeError
 
-
-
         out = torch.mean(torch.stack([att(x, adj) for att in self.ConvLayer2]),dim=0)
-
         return out
 
 
     def decode(self,tf_embed,target_embed):
-
         if self.type =='dot':
-
             prob = torch.mul(tf_embed, target_embed)
             prob = torch.sum(prob,dim=1).view(-1,1)
-
-
             return prob
 
         elif self.type =='cosine':
             prob = torch.cosine_similarity(tf_embed,target_embed,dim=1).view(-1,1)
-
             return prob
 
         elif self.type == 'MLP':
             h = torch.cat([tf_embed, target_embed],dim=1)
             prob = self.linear(h)
-
             return prob
+
         else:
             raise TypeError(r'{} is not available'.format(self.type))
 
 
     def forward(self,x,adj,train_sample):
-
         embed = self.encode(x,adj)
 
         tf_embed = self.tf_linear1(embed)
@@ -129,81 +174,10 @@ class GENELink(nn.Module):
         train_target = target_embed[train_sample[:, 1]]
 
         pred = self.decode(train_tf, train_target)
-
         return pred
 
     def get_embedding(self):
         return self.tf_ouput, self.target_output
-
-
-
-class AttentionLayer(nn.Module):
-    def __init__(self,input_dim,output_dim,alpha=0.2,bias=True):
-        super(AttentionLayer, self).__init__()
-
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.alpha = alpha
-
-
-        self.weight = nn.Parameter(torch.FloatTensor(self.input_dim, self.output_dim))
-        self.weight_interact = nn.Parameter(torch.FloatTensor(self.input_dim,self.output_dim))
-        self.a = nn.Parameter(torch.zeros(size=(2*self.output_dim,1)))
-
-
-        if bias:
-            self.bias = nn.Parameter(torch.FloatTensor(self.output_dim))
-        else:
-            self.register_parameter('bias', None)
-
-        self.reset_parameters()
-
-
-    def reset_parameters(self):
-        nn.init.xavier_uniform_(self.weight.data, gain=1.414)
-        nn.init.xavier_uniform_(self.weight_interact.data, gain=1.414)
-        if self.bias is not None:
-            self.bias.data.fill_(0)
-        nn.init.xavier_uniform_(self.a.data, gain=1.414)
-
-    def _prepare_attentional_mechanism_input(self, x):
-
-        Wh1 = torch.matmul(x, self.a[:self.output_dim, :])
-        Wh2 = torch.matmul(x, self.a[self.output_dim:, :])
-        e = F.leaky_relu(Wh1 + Wh2.T,negative_slope=self.alpha)
-        return e
-
-
-    def forward(self,x,adj):
-
-
-        h = torch.matmul(x, self.weight)
-        e = self._prepare_attentional_mechanism_input(h)
-
-        zero_vec = -9e15 * torch.ones_like(e)
-        attention = torch.where(adj.to_dense()>0, e, zero_vec)
-        attention = F.softmax(attention, dim=1)
-        # attention = F.softmax(e, dim=1)
-
-        attention = F.dropout(attention, training=self.training)
-        h_pass = torch.matmul(attention, h)
-
-        output_data = h_pass
-
-
-        output_data = F.leaky_relu(output_data,negative_slope=self.alpha)
-        output_data = F.normalize(output_data,p=2,dim=1)
-
-
-        if self.bias is not None:
-            output_data = output_data + self.bias
-
-        return output_data
-
-
-
-
-
 
 
 
